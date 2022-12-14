@@ -6,8 +6,6 @@ CRUClimateData - This is a function to get rasters of recently historical climat
 
 ExtractBeyerClimateData - This extracts palaeoclimate data as constructed from the Beyer et al paper - "High-resolution terrestrial climate, bioclimate and vegetation for the last 120,000 years" https://www.nature.com/articles/s41597-020-0552-1
 
-ClimateVelocity - This function calculates the velocity of climate change from climate rasters
-
 ### Spatial Functions 
 SquareRasterCells - This is a really quick funciton that I got from adamlilith/enmSdm (https://rdrr.io/github/adamlilith/enmSdm/src/R/squareRastCells.r) - ALL CREDIT TO HIM!! It converts raster cells into squares, which is required for SDMS using MaxEnt
 
