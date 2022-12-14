@@ -37,14 +37,14 @@ MollCRS <- "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m
 #### GetThatBasemap ####
 
 ##BEFORE YOU RUN THIS FUNCTION##
-#You need to download the following shapefile and save it somewhere
-#Download the shapefile, save it somewhere. 
-WorldPolyFP <- paste0("/Users/hannahwauchope/Dropbox/Work/Data/GISLayers/CountryContinentWorldSHPS/World/TM_WORLD_BORDERS-0.3-SSudan.shp")
+#You need to download the following shapefile and save it somewhere:
+# TM_WORLD_BORDERS-0.3.zip from
+# https://thematicmapping.org/downloads/world_borders.php
 
 #This function is a fairly janky function to get background polygon.
 
 #ARGUMENTS:
-#"WorldPolyFP" needs to be the FP to where you saved the WorldPoly
+#"WorldPolyFP" needs to be the FP to where you saved the TMWorldBorders shapefile
 #"Region" can either be:
 ### a continental region (out of World, Europe, Russia, Africa, Amercicas, North America, South America, Asia Middle East, Antarctica)
 ### A vector of multiple continental regions (E.g. c("Europe", "Russia", "North America"))
@@ -169,7 +169,7 @@ GetThatBasemap <- function(WorldPolyFP, Region, CropCoords=NULL, CountryNames=FA
 #PolyAlpha = alpha of the polygon
 
 
-MakeThatMap <- function(MapPoints=NULL, MapPolys=NULL, MapRasts=NULL, MapOrder=c("Rast", "Poly", "Points"),
+MakeThatMap <- function(MapPoint=NULL, MapPoly=NULL, MapRast=NULL, MapOrder=c("Rast", "Poly", "Points"),
                         PointColVal = "NumAxesOutsideRange", 
                         PointColName = "Number of PCA's outside Range",
                         PointCols = brewer.pal(8, "RdYlBu")[4:1],
@@ -185,12 +185,12 @@ MakeThatMap <- function(MapPoints=NULL, MapPolys=NULL, MapRasts=NULL, MapOrder=c
     GeomLat <- names(MapPoint)[names(MapPoint) %in% c("y", "lat", "latitude", "Latitude", "Lat")]
     MapPoint <- vect(MapPoint, geom=c(GeomLon, GeomLat), crs=WGSCRS)
   }
-  
+  names(MapPoint)[names(MapPoint) == PointColVal] <- "PointCol"
   if(class(MapPoly)!="SpatVector"){
     MapPoly <- vect(MapPoly)
   }
   
-  if(class(MapRast)!="SpatRast"){
+  if(class(MapRast)!="SpatRaster"){
     MapRast <- rast(MapRast)
   }
   
@@ -288,8 +288,6 @@ MakeThatMap <- function(MapPoints=NULL, MapPolys=NULL, MapRasts=NULL, MapOrder=c
 #PointSize = size of your points
 
 #RastColName = name of the raster legend
-#RastMin = Min val in your rast colourscale (if null R will calculate this for you)
-#RastMax = Max val in your rast colourscale (if null R will calculate this for you)
 
 #PolyFillCol = Fill colour of the polygon
 #PolyLineCol = Line colour of the polygon
@@ -299,14 +297,12 @@ CreateThoseImages <- function(AnimPoints=NULL, AnimPolys=NULL, AnimRasts=NULL, T
                                   AnimFP = paste0(FP, "/Animations/", Spec, "/"),
                                   overwrite=TRUE, TimeScale=TRUE,
                                   TimeStepTitle=FALSE, SaveReps=1,
-                                  TimeScaleLab = "ThousandYearsBeforePreset",
+                                  TimeScaleLab = "Thousand Years Before Present",
                                   PointColVal = "NumAxesOutsideRange", 
                                   PointColName = "Number of PCA's outside Range",
                                   PointCols = brewer.pal(8, "RdYlBu")[4:1],
                                   PointSize=1.5,
                                   RastColName = "Probability of Occurrence",
-                                  RastMin = NULL,
-                                  RastMax = NULL,
                                   PolyFillCol = "gray70",
                                   PolyLineCol = NA,
                                   PolyAlpha = 0.5){
@@ -354,8 +350,8 @@ CreateThoseImages <- function(AnimPoints=NULL, AnimPolys=NULL, AnimRasts=NULL, T
     if(TimeScale == TRUE){
       ScalePlot <- ggplot()+
         geom_point(aes(x=as.numeric(TS), y=0.01), size=4, colour=ifelse(PointCols[[1]]=="viridis", "#5ec962", PointCols[[5]]))+
-        geom_line(aes(x=c(0, 22), y=0))+
-        scale_x_reverse(expand=c(0.1,0.1), breaks=rev(seq(0, 22, 2)))+
+        geom_line(aes(x=c(as.numeric(tail(TimeSteps,1)), as.numeric(TimeSteps[[1]])), y=0))+
+        scale_x_reverse(expand=c(0.1,0.1), breaks=rev(seq(floor(as.numeric(tail(TimeSteps,1))), ceiling(as.numeric(TimeSteps[[1]])), round((as.numeric(TimeSteps[[1]])-as.numeric(tail(TimeSteps,1)))/10))))+
         scale_y_continuous(expand=c(0,0), limits=c(0,1))+
         xlab(TimeScaleLab)+
         theme(axis.line.y=element_blank(), axis.text.y = element_blank(), axis.ticks.y=element_blank(), axis.title.y = element_blank(),
@@ -374,6 +370,9 @@ CreateThoseImages <- function(AnimPoints=NULL, AnimPolys=NULL, AnimRasts=NULL, T
 
 #### MakeThatAnimation ####
 #Finally, function creates the animation
+#NOTE. This reads in all the files from the "Images" folder (within the AnimFP you've specified) ***in order they were written***
+#This means if you wanted to make an animation with various data sources, run "CreateThoseImages" with your data sources in the order you want them to appear in the animation (just make sure to set overwrite to false so it doesn't erase each time!)
+#You can play around with the number of SaveReps you use in "CreateThoseImages" to make certain maps last for more or less time in the animation
 
 ##ARGUMENTS 
 #AnimFP = same as the filepath in CreateAnimationImages

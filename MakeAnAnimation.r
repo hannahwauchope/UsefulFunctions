@@ -1,26 +1,95 @@
-library(tidyverse)
-library(tidyterra)
-library(terra)
-library(viridis)
-library(gtools)
-library(magick)
-library(pbapply)
-library(pbmcapply)
-library(RColorBrewer)
-library(cowplot)
-library(plyr)
-
 FP <- "/Users/hannahwauchope/Dropbox/Work/Projects/PaleoSDMs/"
 DataFP <- "/Users/hannahwauchope/Dropbox/Work/Data/"
-mapWorld <- borders("world", colour="gray70", fill="gray70")
-WGSCRS <- "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"
-MollCRS <- "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
-ncores <- 7
+
+source("~/Documents/GitHub/UsefulFunctions/VisualiseYourSpatialData.R")
 
 #Get a polygon
 #Download the shapefile, save it somewhere. 
 WorldPolyFP <- paste0(DataFP, "GISLayers/CountryContinentWorldSHPS/World/TM_WORLD_BORDERS-0.3-SSudan.shp")
 
+#### EXAMPLE RUN WITH MY DATA ####
+# Create animations of SDM output, with fossil locations overlayed for the past, and GBIF locations for the present
+#Running this for many species
+PolSDMs3 <- read.csv(paste0(FP, "SDMs/Output/SDMSampleOutput.csv"))
+load(file=paste0(FP, "GBIFDownloads/GBIFReduce.RData"))
+
+SpecToModel <- c("Populus.tremuloides", "Betula.pendula", "Juniperus.communis", "Pinus.contorta", "Alnus.rubra", "Centaurea.scabiosa")
+SpecToModel <- gsub("[.]", " ", SpecToModel)
+SpecToModel <- data.frame(Species=SpecToModel, Region=c("North America", "Europe Russia Asia Middle East", "Europe Russia North America", "North America", "North America", "Europe Russia Asia Middle East"))
+
+pblapply(1:nrow(SpecToModel), function(STM){
+  Spec <- SpecToModel[STM,]$Species
+  Region <- SpecToModel[STM,]$Region
+  print(Spec)
+  #Get the region for the polygon (we're just using one static one)
+  if(Region=="Europe Russia Asia Middle East"){
+    AnimPolys <- GetThatBasemap(WorldPolyFP, Region, c(-30, 180, -11, 82))
+  } else {
+    AnimPolys <- GetThatBasemap(WorldPolyFP, Region)
+  }
+  
+  #Get the points for the relevant species, do a bit of cleaning
+  AnimPoints <- subset(PolSDMs3, Species==Spec & AgeScale==1)
+  AnimPoints <- vect(AnimPoints, geom=c("x", "y"), crs=MollCRS)
+  AnimPoints <- project(AnimPoints, WGSCRS)
+  AnimPoints <- crop(AnimPoints, AnimPolys)
+  AnimPoints <- AnimPoints[!is.na(AnimPoints$SDMScale),]
+  names(AnimPoints)[names(AnimPoints)=="Clamp"] <- "NumAxesOutsideRange"
+  AnimPoints$NumAxesOutsideRange <- as.factor(AnimPoints$NumAxesOutsideRange)
+  AnimPoints$PointVal <- factor(round_any(AnimPoints$SDMScale, 0.25), levels=c(0,0.25, 0.5, 0.75, 1))
+  
+  #Get the time steps
+  TimeSteps <- c(rev(sort(as.numeric(unique(AnimPoints[AnimPoints$Dataset_Sample!="GBIF"]$Ages)))), unique(AnimPoints[AnimPoints$Dataset_Sample=="GBIF"]$Ages))
+  TimeSteps <- as.character(TimeSteps)
+  
+  #Split points vector into a list of vectors based on timesteps. 
+  AnimPoints <- pblapply(TimeSteps, function(TS) AnimPoints[AnimPoints$Ages == TS,])
+  names(AnimPoints) <- TimeSteps
+  
+  print("Compile Rasters")
+
+  AnimRasts <- pblapply(TimeSteps, function(TS){
+    rasty <- rast(paste0(FP, "/SDMs/", gsub(" ", ".", Spec), "/HindcastRasters/Hindcast_", TS, ".tif")) #Read in raster
+    rasty <- project(rasty, WGSCRS) #Project
+    if(!is.null(AnimPolys)){ #Crop to same region as the polygon
+      rasty <- crop(rasty, AnimPolys)
+      rasty <- mask(rasty, AnimPolys)
+    }
+    rasty[!is.na(rasty)] <- round_any(rasty[!is.na(rasty)], 100)/1000 #Convert raster values into 10 breaks (0,1,0.1)
+    return(rasty)
+  }) #, mc.cores=ncores
+  names(AnimRasts) <- TimeSteps
+  TimeSteps <- as.character(TimeSteps)
+  
+  print("Create Images")
+  AnimPointsPast <- AnimPoints[!names(AnimPoints) %in% unique(PolSDMs3[PolSDMs3$Dataset_Sample=="GBIF",]$Ages)]
+  AnimPointsPresent<- AnimPoints[names(AnimPoints) %in% unique(PolSDMs3[PolSDMs3$Dataset_Sample=="GBIF",]$Ages)]
+  AnimRastsPast <- AnimRasts[!names(AnimRasts) %in% unique(PolSDMs3[PolSDMs3$Dataset_Sample=="GBIF",]$Ages)]
+  AnimRastsPresent<- AnimRasts[names(AnimRasts) %in% unique(PolSDMs3[PolSDMs3$Dataset_Sample=="GBIF",]$Ages)]
+  TimeStepsPast <- TimeSteps[!TimeSteps %in% unique(PolSDMs3[PolSDMs3$Dataset_Sample=="GBIF",]$Ages)]
+  TimeStepsPresent <- TimeSteps[TimeSteps %in% unique(PolSDMs3[PolSDMs3$Dataset_Sample=="GBIF",]$Ages)]
+  
+  names(AnimPointsPast) <- as.character(as.numeric(names(AnimPointsPast))/1000)
+  names(AnimRastsPast) <- as.character(as.numeric(names(AnimRastsPast))/1000)
+  TimeStepsPast <- as.character(as.numeric(TimeStepsPast)/1000)
+  
+  CreateThoseImages(AnimPointsPast, AnimPolys, AnimRastsPast, TimeStepsPast, MapOrder=c("Poly", "Rast", "Points"), AnimFP = paste0(FP, "/Animations/", Spec, "/"),
+                        PointColVal = "PointVal", 
+                        PointColName = "Probability of Occurrence",
+                        PointCols = brewer.pal(5, "YlOrRd"))
+  CreateThoseImages(AnimPointsPresent, AnimPolys, AnimRastsPresent, TimeStepsPresent, MapOrder=c("Poly", "Rast", "Points"), AnimFP = paste0(FP, "/Animations/", Spec, "/"),
+                        PointColVal = "PointVal", 
+                        PointColName = "Probability of Occurrence",
+                        PointCols = brewer.pal(5, "YlOrRd"),
+                        PointSize = 0.5,
+                        overwrite=FALSE, 
+                        TimeStepTitle=TRUE,
+                        SaveReps=5)#
+  MakeThatAnimation(AnimFP = paste0(FP, "/Animations/", Spec, "/"), FramesPerSecond=5, SaveName=Spec)
+}) #, mc.cores=6
+
+
+#### GRAVEYARD ####
 #This function is a fairly janky function to get background polygon.
 #WorldPolyFP needs to be the FP to where you saved the WorldPoly
 #Region can either be:
@@ -178,7 +247,7 @@ CreateAnimationImages <- function(AnimPoints=NULL, AnimPolys=NULL, AnimRasts=NUL
   while(length(MapOrder) != 3){
     MapOrder <- c(MapOrder, "NULL")
   }
-
+  
   pblapply(TimeSteps, function(TS){
     if(class(AnimPoints)=="list"){
       AnimPoint <- AnimPoints[[TS]]
@@ -239,9 +308,9 @@ CreateAnimationImages <- function(AnimPoints=NULL, AnimPolys=NULL, AnimRasts=NUL
     if("Rast" %in% MapOrder & RastViridis==TRUE){
       AnimImage <- AnimImage + scale_fill_viridis(na.value=NA, direction=1, name=RastColName, limits=c(RastMin, RastMax))
     }
-
+    
     AnimImage <- AnimImage + guides(fill = guide_legend(order = 1), 
-           colour = guide_legend(order = 2))
+                                    colour = guide_legend(order = 2))
     
     if(TimeStepTitle){
       AnimImage <- AnimImage+labs(title=TS)
@@ -282,74 +351,3 @@ CreateAnimation <- function(AnimFP, FramesPerSecond=2, SaveName){
   print("save animation")
   image_write(myanimation, paste0(AnimFP, SaveName,".gif"))
 }
-
-
-#### EXAMPLE RUN WITH MY DATA ####
-# Create animations of SDM output, with fossil locations overlayed for the past, and GBIF locations for the present
-#Running this for many species
-PolSDMs3 <- read.csv(paste0(FP, "SDMs/Output/SDMSampleOutput.csv"))
-load(file=paste0(FP, "GBIFDownloads/GBIFReduce.RData"))
-
-SpecToModel <- c("Populus.tremuloides", "Betula.pendula", "Juniperus.communis", "Pinus.contorta", "Alnus.rubra", "Centaurea.scabiosa")
-SpecToModel <- gsub("[.]", " ", SpecToModel)
-SpecToModel <- data.frame(Species=SpecToModel, Region=c("North America", "Europe Russia Asia Middle East", "Europe Russia North America", "North America", "North America", "Europe Russia Asia Middle East"))
-
-pblapply(1:nrow(SpecToModel), function(STM){
-  Spec <- SpecToModel[STM,]$Species
-  Region <- SpecToModel[STM,]$Region
-  print(Spec)
-  #Get the region for the polygon (we're just using one static one)
-  if(Region=="Europe Russia Asia Middle East"){
-    AnimPolys <- GetBackground(WorldPolyFP, Region, c(-30, 180, -11, 82))
-  } else {
-    AnimPolys <- GetBackground(WorldPolyFP, Region)
-  }
-  
-  #Get the points for the relevant species, do a bit of cleaning
-  AnimPoints <- subset(PolSDMs3, Species==Spec & AgeScale==1)
-  AnimPoints <- vect(AnimPoints, geom=c("x", "y"), crs=MollCRS)
-  AnimPoints <- project(AnimPoints, WGSCRS)
-  AnimPoints <- crop(AnimPoints, AnimPolys)
-  AnimPoints <- AnimPoints[!is.na(AnimPoints$SDMScale),]
-  names(AnimPoints)[names(AnimPoints)=="Clamp"] <- "NumAxesOutsideRange"
-  AnimPoints$NumAxesOutsideRange <- as.factor(AnimPoints$NumAxesOutsideRange)
-  AnimPoints$PointVal <- factor(round_any(AnimPoints$SDMScale, 0.25), levels=c(0,0.25, 0.5, 0.75, 1))
-  
-  #Get the time steps
-  TimeSteps <- c(rev(sort(as.numeric(unique(AnimPoints[AnimPoints$Dataset_Sample!="GBIF"]$Ages)))), unique(AnimPoints[AnimPoints$Dataset_Sample=="GBIF"]$Ages))
-  TimeSteps <- as.character(TimeSteps)
-  
-  #Split points vector into a list of vectors based on timesteps. 
-  AnimPoints <- pblapply(TimeSteps, function(TS) AnimPoints[AnimPoints$Ages == TS,])
-  names(AnimPoints) <- TimeSteps
-  
-  print("Compile Rasters")
-
-  AnimRasts <- pblapply(TimeSteps, function(TS){
-    rasty <- rast(paste0(FP, "/SDMs/", gsub(" ", ".", Spec), "/HindcastRasters/Hindcast_", TS, ".tif")) #Read in raster
-    rasty <- project(rasty, WGSCRS) #Project
-    if(!is.null(AnimPolys)){ #Crop to same region as the polygon
-      rasty <- crop(rasty, AnimPolys)
-      rasty <- mask(rasty, AnimPolys)
-    }
-    rasty[!is.na(rasty)] <- round_any(rasty[!is.na(rasty)], 100)/1000 #Convert raster values into 10 breaks (0,1,0.1)
-    return(rasty)
-  }) #, mc.cores=ncores
-  names(AnimRasts) <- TimeSteps
-  TimeSteps <- as.character(TimeSteps)
-  
-  print("Create Images")
-  CreateAnimationImages(AnimPoints[1:(length(AnimPoints)-3)], AnimPolys, AnimRasts[1:(length(AnimRasts)-3)], TimeSteps[1:(length(TimeSteps)-3)], MapOrder=c("Poly", "Rast", "Points"), AnimFP = paste0(FP, "/Animations/", Spec, "/"),
-                        PointColVal = "PointVal", 
-                        PointColName = "Probability of Occurrence",
-                        PointCols = brewer.pal(5, "YlOrRd"))
-  CreateAnimationImages(AnimPoints[(length(AnimPoints)-2):length(AnimPoints)], AnimPolys, AnimRasts[(length(AnimRasts)-2):length(AnimRasts)], TimeSteps[(length(TimeSteps)-2):length(TimeSteps)], MapOrder=c("Poly", "Rast", "Points"), AnimFP = paste0(FP, "/Animations/", Spec, "/"),
-                        PointColVal = "PointVal", 
-                        PointColName = "Probability of Occurrence",
-                        PointCols = brewer.pal(5, "YlOrRd"),
-                        PointSize = 0.5,
-                        overwrite=FALSE, 
-                        TimeStepTitle=TRUE,
-                        SaveReps=5)#
-  CreateAnimation(AnimFP = paste0(FP, "/Animations/", Spec, "/"), FramesPerSecond=5, SaveName=Spec)
-}) #, mc.cores=6
